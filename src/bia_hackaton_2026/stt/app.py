@@ -4,6 +4,8 @@ import os
 import streamlit as st
 from dotenv import load_dotenv
 
+from bia_hackaton_2026.agent import run_turn
+from bia_hackaton_2026.llm.response_generator import MODELS as LLM_MODELS
 from bia_hackaton_2026.vlm import build_agent_input, describe_image
 from bia_hackaton_2026.stt.detect import MODELS, classify_text, detect_and_transcribe, timed_step
 
@@ -25,6 +27,8 @@ st.session_state.setdefault("widget_gen", 0)
 st.session_state.setdefault("history", [])
 st.session_state.setdefault("result", None)
 st.session_state.setdefault("img_gen", 0)
+st.session_state.setdefault("agent_history", [])
+st.session_state.setdefault("agent_turns", [])
 st.session_state.setdefault("img_result", None)
 gen = st.session_state.widget_gen
 
@@ -45,6 +49,7 @@ with st.sidebar:
     st.header("API keys")
     groq_key = st.text_input("Groq API key", value=os.environ.get("GROQ_API_KEY", ""), type="password")
     sarvam_key = st.text_input("Sarvam API key", value=os.environ.get("SARVAM_AI", ""), type="password")
+    llm_model = st.selectbox("Agent LLM (Groq)", LLM_MODELS)
     st.divider()
     if st.button("Clear history", disabled=not st.session_state.history):
         st.session_state.history = []
@@ -160,6 +165,37 @@ if combined:
     )
 else:
     st.caption("Transcribe audio and/or describe an image to build the message.")
+
+st.divider()
+st.subheader("🤖 Sahayi agent")
+st.caption("Sends the combined message above to the LLM; shows the reply to the user and the alert for family.")
+a1, a2 = st.columns(2)
+if a1.button("Send to Sahayi", type="primary", disabled=not combined, use_container_width=True):
+    with st.spinner("Sahayi is thinking…"):
+        out = run_turn(combined, st.session_state.agent_history, llm_model, groq_key)
+    st.session_state.agent_turns.insert(0, {"input": combined, **out})
+if a2.button("Reset conversation", disabled=not st.session_state.agent_turns, use_container_width=True):
+    st.session_state.agent_history = []
+    st.session_state.agent_turns = []
+    st.rerun()
+
+for n, t in enumerate(st.session_state.agent_turns):
+    turn = t["turn"]
+    with st.container(border=True):
+        if t["fallback"]:
+            st.error(t["error"] or "Model output was invalid twice - fallback reply used.")
+        st.markdown("**Reply to the user**")
+        st.info(t["user_message"])
+        lvl = turn.family.suggested_level
+        st.markdown(f"**Family alert** - level {lvl} - {'SENT' if t['family_sent'] else 'not sent'}")
+        (st.error if lvl == 3 else st.warning if lvl == 2 else st.success)(t["family_message"])
+        st.caption(
+            f"Model: {t['model']} - {t['seconds']} s - attempts: {t['attempts']} - "
+            f"{'FALLBACK used' if t['fallback'] else 'valid JSON'} - turn {len(st.session_state.agent_turns) - n}"
+        )
+        with st.expander("Input sent to the LLM / raw output"):
+            st.code(t["input"], language=None)
+            st.code(t["raw"] or "(none)", language="json")
 
 if st.session_state.history:
     st.subheader("History")

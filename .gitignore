@@ -43,3 +43,4 @@ models/
 *.sqlite3
 
 .venv-whisper/
+memory.json
