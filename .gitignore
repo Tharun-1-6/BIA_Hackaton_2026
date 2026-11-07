@@ -29,6 +29,8 @@ env/
 # Environment Variables
 .env
 .env.local
+*.log
+whatsapp_events.log
 
 # IDEs
 .vscode/
