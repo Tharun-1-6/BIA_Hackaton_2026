@@ -1,13 +1,14 @@
-"""LLM call for the Sahayi agent (Groq-hosted GPT-OSS). The prompt lives in prompt.py."""
+"""LLM call for the Sahayi agent (Groq-hosted with multi-model fallback). The prompt lives in prompt.py."""
+import json
 import os
 
 from groq import Groq
 
 from bia_hackaton_2026.llm.prompt import SYSTEM_PROMPT
 
-# Was a local Ollama model (gemma4:e2b); now Groq-hosted GPT-OSS.
-MODEL = "openai/gpt-oss-120b"
-MODELS = ("openai/gpt-oss-120b", "openai/gpt-oss-20b")
+# Preferred Groq models
+MODEL = "llama-3.3-70b-versatile"
+MODELS = ("llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-120b")
 
 
 def ask_llm(
@@ -19,17 +20,64 @@ def ask_llm(
 ) -> str:
     """Returns the model's JSON reply as a string (parsed/validated by the caller)."""
     key = (api_key or os.environ.get("GROQ_API_KEY") or "").strip()
-    if not key:
-        raise RuntimeError("Groq API key missing (set GROQ_API_KEY in .env or the sidebar).")
-    r = Groq(api_key=key).chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            *history,
-            {"role": "user", "content": user_input},
-        ],
-        response_format={"type": "json_object"},  # equivalent of Ollama's format="json"
-        reasoning_effort="low",                   # equivalent of think=False: keep it fast
-        temperature=0.2,
-    )
-    return r.choices[0].message.content or ""
+
+    # 1. Groq Provider
+    if key:
+        client = Groq(api_key=key)
+        for candidate_model in (model, "llama-3.3-70b-versatile", "llama-3.1-8b-instant"):
+            try:
+                r = client.chat.completions.create(
+                    model=candidate_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        *history,
+                        {"role": "user", "content": user_input},
+                    ],
+                    response_format={"type": "json_object"},
+                    reasoning_effort="low" if "gpt-oss" in candidate_model else None,
+                    temperature=0.2,
+                )
+                if r.choices[0].message.content:
+                    return r.choices[0].message.content
+            except Exception as e:
+                print(f"[LLM GROQ WARNING] Model {candidate_model} failed: {e}")
+                continue
+
+    # 2. Google Gemini Fallback
+    gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if gemini_key:
+        try:
+            from google import genai
+            g_client = genai.Client(api_key=gemini_key)
+            resp = g_client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=user_input,
+                config={"system_instruction": system_prompt, "response_mime_type": "application/json"},
+            )
+            if resp.text:
+                return resp.text
+        except Exception as ge:
+            print(f"[LLM GEMINI WARNING] {ge}")
+
+    # 3. Rule-based graceful fallback (offline or keys missing)
+    lower = user_input.lower()
+    emergency_words = ["sos", "help", "pain", "fell", "തലകറക്കം", "നെഞ്ചുവേദന", "ശ്വാസം", "വീണു", "വേദന"]
+    is_emergency = any(w in lower for w in emergency_words)
+    level = 3 if is_emergency else 1
+
+    return json.dumps({
+        "user": {
+            "text": (
+                "Sahayi: അടിയന്തര സാഹായ അഭ്യർത്ഥന രേഖപ്പെടുത്തി. ശാന്തരായിരിക്കുക, കെയർഗിവർക്ക് വിവരമറിയിച്ചു. "
+                "(Emergency alert received. Your caregiver has been notified. Please stay calm.)"
+                if is_emergency
+                else f"Sahayi: നമസ്കാരം! സന്ദേശം ലഭിച്ചു. സുഖമാണോ? (Hello! Message received. How are you feeling today?)"
+            ),
+            "follow_up": None,
+        },
+        "family": {
+            "summary": f"Senior member sent: '{user_input}'. Emergency detected." if is_emergency else f"Senior message: '{user_input}'",
+            "suggested_level": level,
+            "send": is_emergency,
+        },
+    })

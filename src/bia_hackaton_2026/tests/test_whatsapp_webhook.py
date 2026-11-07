@@ -183,6 +183,85 @@ def test_meta_webhook_caregiver_inbound() -> None:
         assert "Sahayi Caregiver Portal Connected" in args[1]
 
 
+def test_meta_webhook_ai_agent_text_integration() -> None:
+    """Verifies that non-SOS text messages are processed through the AI agent pipeline."""
+    meta_json = {
+        "object": "whatsapp_business_account",
+        "entry": [
+            {
+                "id": "1844407913356808",
+                "changes": [
+                    {
+                        "value": {
+                            "messaging_product": "whatsapp",
+                            "messages": [
+                                {
+                                    "from": "917012649561",
+                                    "id": "wamid.TEST_AI_001",
+                                    "type": "text",
+                                    "text": {"body": "സുഖമാണോ? (How are you?)"},
+                                }
+                            ],
+                        },
+                        "field": "messages",
+                    }
+                ],
+            }
+        ],
+    }
+
+    with patch("bia_hackaton_2026.agent.runner.send_message") as mock_send:
+        response = client.post("/webhooks/whatsapp", json=meta_json)
+        assert response.status_code == 200
+        assert response.text == "EVENT_RECEIVED"
+        mock_send.assert_called()
+
+
+def test_meta_webhook_ai_agent_voice_integration(tmp_path) -> None:
+    """Verifies that incoming WhatsApp audio (.ogg) is transcribed via STT and processed by AI agent."""
+    dummy_audio = tmp_path / "test.ogg"
+    dummy_audio.write_bytes(b"dummy audio content")
+
+    meta_audio_json = {
+        "object": "whatsapp_business_account",
+        "entry": [
+            {
+                "id": "1844407913356808",
+                "changes": [
+                    {
+                        "value": {
+                            "messaging_product": "whatsapp",
+                            "messages": [
+                                {
+                                    "from": "917012649561",
+                                    "id": "wamid.TEST_AUDIO_001",
+                                    "type": "audio",
+                                    "audio": {"id": "1234567890", "mime_type": "audio/ogg"},
+                                }
+                            ],
+                        },
+                        "field": "messages",
+                    }
+                ],
+            }
+        ],
+    }
+
+    with patch(
+        "bia_hackaton_2026.whatsapp.webhook.download_meta_audio",
+        return_value=str(dummy_audio),
+    ), patch(
+        "bia_hackaton_2026.stt.detect.detect_and_transcribe",
+        return_value={"text": "എനിക്ക് നെഞ്ചുവേദന എടുക്കുന്നു", "language": "ml"},
+    ), patch(
+        "bia_hackaton_2026.agent.runner.send_message"
+    ) as mock_agent_send:
+        response = client.post("/webhooks/whatsapp", json=meta_audio_json)
+        assert response.status_code == 200
+        assert response.text == "EVENT_RECEIVED"
+        mock_agent_send.assert_called()
+
+
 def test_whatsapp_webhook_audio_attachment() -> None:
     """Verifies that POST /webhooks/whatsapp handles audio attachment and calls download_audio_media."""
     payload = mock_audio_payload(

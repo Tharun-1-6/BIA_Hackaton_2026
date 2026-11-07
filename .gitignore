@@ -40,6 +40,7 @@ whatsapp_events.log
 .ipynb_checkpoints/
 
 # Data & Models cache
+data/
 data/raw/
 models/
 *.sqlite3

@@ -4,6 +4,10 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, BackgroundTasks, Form, Request, Response
 from fastapi.responses import PlainTextResponse
 
+from bia_hackaton_2026.service.orchestrator import (
+    process_inbound_text,
+    process_inbound_voice,
+)
 from bia_hackaton_2026.whatsapp.config import (
     CAREGIVER_WHATSAPP_NUMBER,
     ELDER_PHONE_NUMBER,
@@ -125,14 +129,19 @@ async def receive_whatsapp(
                             try:
                                 audio_path = download_meta_audio(audio_id)
                                 print(f"[META AUDIO SAVED] Path: {audio_path}")
+                                background_tasks.add_task(
+                                    process_inbound_voice,
+                                    sender_formatted,
+                                    audio_path,
+                                    role_tag,
+                                )
                             except Exception as e:
                                 print(f"[META AUDIO DOWNLOAD ERROR] {e}")
-
-                        reply_msg = (
-                            "Sahayi: വോയ്സ് സന്ദേശം ലഭിച്ചു. പരിശോധിക്കുന്നു... "
-                            "(Voice note received, processing...)"
-                        )
-                        background_tasks.add_task(send_whatsapp_message, sender_formatted, reply_msg)
+                                reply_msg = (
+                                    "Sahayi: വോയ്സ് സന്ദേശം ഡൗൺലോഡ് ചെയ്യാൻ കഴിഞ്ഞില്ല. വീണ്ടും ശ്രമിക്കുക. "
+                                    "(Could not download voice note. Please try again.)"
+                                )
+                                background_tasks.add_task(send_whatsapp_message, sender_formatted, reply_msg)
                         continue
 
                     # Case C: Text Message / SOS
@@ -156,11 +165,13 @@ async def receive_whatsapp(
                             print(f"[SOS ESCALATION] Alerting caregiver exclusively: +{clean_caregiver}")
                             background_tasks.add_task(send_whatsapp_message, clean_caregiver, caregiver_alert)
                     else:
-                        fallback_reply = (
-                            f"Sahayi: സന്ദേശം ലഭിച്ചു '{text_body}'. വോയ്സ് മെസ്സേജ് അയക്കാവുന്നതാണ്. "
-                            f"(Message received. You can also send voice notes.)"
+                        # Full AI Agent Turn (LLM analyzes text, decides reply, evaluates emergency)
+                        background_tasks.add_task(
+                            process_inbound_text,
+                            sender_formatted,
+                            text_body,
+                            role_tag,
                         )
-                        background_tasks.add_task(send_whatsapp_message, sender_formatted, fallback_reply)
 
         return PlainTextResponse(content="EVENT_RECEIVED", status_code=200)
 
