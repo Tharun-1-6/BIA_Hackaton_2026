@@ -3,7 +3,7 @@ Turn, family-send rule), but returns everything so the Streamlit UI can display 
 import sys
 import time
 
-from bia_hackaton_2026.llm.response_generator import MODEL, ask_llm
+from bia_hackaton_2026.llm.response import MODEL, ask_llm
 from bia_hackaton_2026.message_processor.formatter import format_family_message, format_user_message
 from bia_hackaton_2026.message_processor.parser import parse_response
 from bia_hackaton_2026.message_processor.schema import Turn

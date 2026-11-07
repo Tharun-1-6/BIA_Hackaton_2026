@@ -5,7 +5,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from bia_hackaton_2026.agent import run_turn
-from bia_hackaton_2026.llm.response_generator import MODELS as LLM_MODELS
+from bia_hackaton_2026.llm.response import MODELS as LLM_MODELS
 from bia_hackaton_2026.vlm import build_agent_input, describe_image
 from bia_hackaton_2026.stt.detect import MODELS, classify_text, detect_and_transcribe, timed_step
 
