@@ -18,6 +18,7 @@ from bia_hackaton_2026.ai.stt import transcribe_audio
 from bia_hackaton_2026.whatsapp.config import (
     CAREGIVER_WHATSAPP_NUMBER,
     ELDER_PHONE_NUMBER,
+    get_caregiver_numbers,
 )
 from bia_hackaton_2026.whatsapp.interactive_actions import handle_member_sos
 from bia_hackaton_2026.whatsapp.sender import (
@@ -70,18 +71,16 @@ def trigger_sos_escalation(
     summary: str = "Emergency assistance requested",
     caregiver_phone: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Developer Tool: Programmatically triggers an Emergency SOS Escalation.
-
-    Can be invoked by:
-    - Teammate AI agents (detecting distress from conversation)
-    - Fall detection / IoT sensors
-    - Medication reminder cron jobs (after repeated missed doses)
-    """
+    """Developer Tool: Programmatically triggers an Emergency SOS Escalation to all caregivers."""
     target_elder = elder_phone or ELDER_PHONE_NUMBER
-    target_caregiver = caregiver_phone or CAREGIVER_WHATSAPP_NUMBER
-    clean_caregiver = target_caregiver.replace("whatsapp:", "").replace("+", "").strip()
     clean_elder = target_elder.replace("whatsapp:", "").replace("+", "").strip()
 
+    if caregiver_phone:
+        caregivers = [caregiver_phone]
+    else:
+        caregivers = get_caregiver_numbers()
+
+    clean_caregivers = [c.replace("whatsapp:", "").replace("+", "").strip() for c in caregivers]
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     # 1. Format the Critical Caregiver Dispatch Alert
@@ -96,23 +95,29 @@ def trigger_sos_escalation(
 
     # 2. Calming Reassurance for Elder
     elder_reassurance = (
-        f"Sahayi SOS: അടിയന്തര സഹായം രേഖപ്പെടുത്തി. നിങ്ങളുടെ കെയർഗിവർക്ക് (+{clean_caregiver}) "
-        f"വിവരം നൽകിയിട്ടുണ്ട്. ഉടൻ സഹായം എത്തും, ശാന്തരായിരിക്കുക.\n"
-        f"(Emergency alert registered. Help notification sent to caregiver +{clean_caregiver}. Help is on the way.)"
+        "Sahayi SOS: അടിയന്തര സഹായം രേഖപ്പെടുത്തി. നിങ്ങളുടെ കെയർഗിവർമാർക്ക് "
+        "വിവരം നൽകിയിട്ടുണ്ട്. ഉടൻ സഹായം എത്തും, ശാന്തരായിരിക്കുക.\n"
+        "(Emergency alert registered. Help notification sent to caregivers. Help is on the way.)"
     )
 
-    print(f"\n[ORCHESTRATOR - SOS ESCALATION] Source: {trigger_source} | Member: +{clean_elder} -> Caregiver: +{clean_caregiver}")
+    print(f"\n[ORCHESTRATOR - SOS ESCALATION] Source: {trigger_source} | Member: +{clean_elder} -> Caregivers: {clean_caregivers}")
     elder_msg_id = send_whatsapp_message(target_elder, elder_reassurance)
-    caregiver_msg_id = send_whatsapp_message(clean_caregiver, caregiver_alert)
+
+    caregiver_msg_ids = []
+    for cg in clean_caregivers:
+        if cg != clean_elder:
+            mid = send_whatsapp_message(cg, caregiver_alert)
+            caregiver_msg_ids.append(mid)
 
     return {
         "status": "ESCALATED",
         "timestamp": now_iso,
         "trigger_source": trigger_source,
         "elder_phone": f"+{clean_elder}",
-        "caregiver_phone": f"+{clean_caregiver}",
+        "caregiver_phones": [f"+{c}" for c in clean_caregivers],
         "elder_message_id": elder_msg_id,
-        "caregiver_message_id": caregiver_msg_id,
+        "caregiver_message_id": caregiver_msg_ids[0] if caregiver_msg_ids else "",
+        "caregiver_message_ids": caregiver_msg_ids,
         "summary": summary,
     }
 
@@ -129,11 +134,12 @@ def process_inbound_text(
 ) -> Dict[str, Any]:
     """Processes inbound text message using the complete AI agent pipeline."""
     clean_sender = sender_phone.replace("whatsapp:", "").replace("+", "").strip()
-    clean_caregiver = CAREGIVER_WHATSAPP_NUMBER.replace("whatsapp:", "").replace("+", "").strip()
+    caregivers = get_caregiver_numbers()
+    clean_caregivers = [c.replace("whatsapp:", "").replace("+", "").strip() for c in caregivers]
     normalized = (text or "").strip().upper()
 
     # Case 1: Caregiver Message
-    if role == "CAREGIVER":
+    if role == "CAREGIVER" or clean_sender in clean_caregivers:
         reply = (
             "🛡️ *Sahayi Caregiver Portal Connected*\n\n"
             "നമസ്കാരം! താങ്കൾ Sahayi കെയർഗിവറായി വിജയകരമായി ബന്ധിപ്പിക്കപ്പെട്ടു.\n"
@@ -160,7 +166,7 @@ def process_inbound_text(
             user_input=text,
             history=history,
             user_phone=sender_phone,
-            family_phone=clean_caregiver,
+            family_phone=",".join(clean_caregivers),
         )
         save_user_history(sender_phone, history)
         return {"action": "AGENT_TURN", "details": turn_result}

@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 from bia_hackaton_2026.main import app
 from bia_hackaton_2026.tests.mock_payloads import mock_audio_payload, mock_text_payload
-from bia_hackaton_2026.whatsapp.config import CAREGIVER_WHATSAPP_NUMBER
+from bia_hackaton_2026.whatsapp.config import CAREGIVER_WHATSAPP_NUMBER, get_caregiver_numbers
 
 client = TestClient(app)
 
@@ -59,7 +59,7 @@ def test_whatsapp_webhook_standard_text() -> None:
 
 
 def test_whatsapp_webhook_initiate_sos() -> None:
-    """Verifies that POST /webhooks/whatsapp triggers emergency response and alerts caregiver."""
+    """Verifies that POST /webhooks/whatsapp triggers emergency response and alerts all caregivers."""
     payload = mock_text_payload(body="INITIATE SOS", sender="whatsapp:+919876543210")
 
     with patch("bia_hackaton_2026.whatsapp.webhook.send_whatsapp_message") as mock_send:
@@ -69,25 +69,23 @@ def test_whatsapp_webhook_initiate_sos() -> None:
         assert "application/xml" in response.headers.get("content-type", "")
         assert response.text == "<Response/>"
 
-        # Should send 2 messages: 1 to member, 1 to caregiver
-        assert mock_send.call_count == 2
+        # Should send 1 message to member, and 1 to each configured caregiver
+        caregivers = get_caregiver_numbers()
+        assert mock_send.call_count == 1 + len(caregivers)
         calls = mock_send.call_args_list
 
         member_call = calls[0][0]
-        caregiver_call = calls[1][0]
-
         assert member_call[0] == "whatsapp:+919876543210"
         assert "Sahayi SOS:" in member_call[1]
         assert "അടിയന്തര സഹായം രേഖപ്പെടുത്തി" in member_call[1]
 
-        expected_caregiver = (
-            CAREGIVER_WHATSAPP_NUMBER
-            if CAREGIVER_WHATSAPP_NUMBER.startswith("whatsapp:")
-            else f"whatsapp:{CAREGIVER_WHATSAPP_NUMBER}"
-        )
-        assert caregiver_call[0] == expected_caregiver
-        assert "EMERGENCY ALERT" in caregiver_call[1]
-        assert "+919876543210" in caregiver_call[1]
+        alerted_recipients = [c[0][0] for c in calls[1:]]
+        for cg in caregivers:
+            expected = cg if cg.startswith("whatsapp:") else f"whatsapp:{cg}"
+            assert expected in alerted_recipients
+            cg_call = next(c for c in calls[1:] if c[0][0] == expected)
+            assert "EMERGENCY ALERT" in cg_call[0][1]
+            assert "+919876543210" in cg_call[0][1]
 
 
 def test_whatsapp_webhook_sos_keyword() -> None:
@@ -99,7 +97,8 @@ def test_whatsapp_webhook_sos_keyword() -> None:
 
         assert response.status_code == 200
         assert response.text == "<Response/>"
-        assert mock_send.call_count == 2
+        caregivers = get_caregiver_numbers()
+        assert mock_send.call_count == 1 + len(caregivers)
         member_call = mock_send.call_args_list[0][0]
         assert "Sahayi SOS:" in member_call[1]
 
@@ -137,13 +136,19 @@ def test_meta_webhook_incoming_sos_json() -> None:
         assert response.status_code == 200
         assert response.text == "EVENT_RECEIVED"
 
-        # Member + Caregiver alert
-        assert mock_send.call_count == 2
+        # Member + All Caregivers alert
+        caregivers = get_caregiver_numbers()
+        assert mock_send.call_count == 1 + len(caregivers)
         calls = mock_send.call_args_list
         assert calls[0][0][0] == "+917012649561"
         assert "Sahayi SOS:" in calls[0][0][1]
-        assert "917736246747" in calls[1][0][0]
-        assert "EMERGENCY ALERT" in calls[1][0][1]
+
+        alerted_recipients = [c[0][0] for c in calls[1:]]
+        for cg in caregivers:
+            clean_cg = cg.replace("whatsapp:", "").replace("+", "").strip()
+            assert any(clean_cg in r for r in alerted_recipients)
+            cg_call = next(c for c in calls[1:] if clean_cg in c[0][0])
+            assert "EMERGENCY ALERT" in cg_call[0][1]
 
 
 def test_meta_webhook_caregiver_inbound() -> None:
@@ -180,6 +185,43 @@ def test_meta_webhook_caregiver_inbound() -> None:
         mock_send.assert_called_once()
         args, _ = mock_send.call_args
         assert args[0] == "+917736246747"
+        assert "Sahayi Caregiver Portal Connected" in args[1]
+
+
+def test_meta_webhook_secondary_caregiver_inbound() -> None:
+    """Verifies that secondary Caregiver messaging the bot also receives portal connection greeting."""
+    meta_json = {
+        "object": "whatsapp_business_account",
+        "entry": [
+            {
+                "id": "1844407913356808",
+                "changes": [
+                    {
+                        "value": {
+                            "messaging_product": "whatsapp",
+                            "messages": [
+                                {
+                                    "from": "919746654062",
+                                    "id": "wamid.TEST_CAREGIVER_002",
+                                    "type": "text",
+                                    "text": {"body": "Hi from caregiver 2"},
+                                }
+                            ],
+                        },
+                        "field": "messages",
+                    }
+                ],
+            }
+        ],
+    }
+
+    with patch("bia_hackaton_2026.whatsapp.webhook.send_whatsapp_message") as mock_send:
+        response = client.post("/webhooks/whatsapp", json=meta_json)
+        assert response.status_code == 200
+        assert response.text == "EVENT_RECEIVED"
+        mock_send.assert_called_once()
+        args, _ = mock_send.call_args
+        assert args[0] == "+919746654062"
         assert "Sahayi Caregiver Portal Connected" in args[1]
 
 

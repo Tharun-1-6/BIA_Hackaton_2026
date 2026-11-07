@@ -63,7 +63,9 @@ def run_turn(
     send_message(target_user, user_message)
     family_sent = bool(turn.family.send or turn.family.suggested_level >= 2)
     if family_sent:
-        send_message(target_family, family_message)
+        family_numbers = [f.strip() for f in target_family.split(",") if f.strip()]
+        for f_num in family_numbers:
+            send_message(f_num, family_message)
 
     history += [
         {"role": "user", "content": user_input},

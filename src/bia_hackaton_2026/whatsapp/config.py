@@ -1,4 +1,5 @@
 import os
+from typing import List
 from dotenv import load_dotenv
 
 # Load environment variables from .env file with override enabled
@@ -14,6 +15,13 @@ def get_meta_token() -> str:
 def get_meta_phone_id() -> str:
     """Dynamically reads the latest META_PHONE_NUMBER_ID from environment."""
     return os.getenv("META_PHONE_NUMBER_ID", "").strip()
+
+
+def get_caregiver_numbers() -> List[str]:
+    """Dynamically returns all configured caregiver phone numbers (supports comma-separated list)."""
+    load_dotenv(override=True)
+    raw = os.getenv("CAREGIVER_WHATSAPP_NUMBERS") or os.getenv("CAREGIVER_WHATSAPP_NUMBER") or "+917736246747"
+    return [n.strip() for n in raw.split(",") if n.strip()]
 
 
 # Meta WhatsApp Cloud API Credentials

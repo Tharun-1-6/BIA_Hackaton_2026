@@ -12,6 +12,7 @@ from bia_hackaton_2026.whatsapp.config import (
     CAREGIVER_WHATSAPP_NUMBER,
     ELDER_PHONE_NUMBER,
     META_VERIFY_TOKEN,
+    get_caregiver_numbers,
 )
 from bia_hackaton_2026.whatsapp.interactive_actions import handle_member_sos
 from bia_hackaton_2026.whatsapp.media import download_audio_media, download_meta_audio
@@ -97,14 +98,13 @@ async def receive_whatsapp(
 
                     clean_sender = sender_formatted.replace("+", "").strip()
                     clean_elder = ELDER_PHONE_NUMBER.replace("+", "").strip()
-                    clean_caregiver = (
-                        CAREGIVER_WHATSAPP_NUMBER.replace("whatsapp:", "").replace("+", "").strip()
-                    )
+                    caregivers = get_caregiver_numbers()
+                    clean_caregivers = [c.replace("whatsapp:", "").replace("+", "").strip() for c in caregivers]
 
-                    if clean_sender == clean_elder:
-                        role_tag = "ELDER"
-                    elif clean_sender == clean_caregiver:
+                    if clean_sender in clean_caregivers:
                         role_tag = "CAREGIVER"
+                    elif clean_sender == clean_elder:
+                        role_tag = "ELDER"
                     else:
                         role_tag = "USER"
 
@@ -152,18 +152,20 @@ async def receive_whatsapp(
                         sos_result = handle_member_sos(sender_formatted, text_body)
                         caregiver_alert = sos_result.get("caregiver_alert")
 
+                        caregivers_display = ", ".join(f"+{c}" for c in clean_caregivers)
                         # 1. Clear reassurance confirmation for Elder (NOT the caregiver emergency dispatch)
                         elder_ack = (
                             "Sahayi SOS: അടിയന്തര സഹായം രേഖപ്പെടുത്തി. നിങ്ങളുടെ കെയർഗിവർക്ക് "
-                            f"(+{clean_caregiver}) വിവരം അറിയിച്ചിട്ടുണ്ട്. ഉടൻ സഹായം എത്തും, ശാന്തരായിരിക്കുക.\n"
-                            f"(Emergency alert received. Your caregiver +{clean_caregiver} has been notified and help is on the way. Please stay calm.)"
+                            f"({caregivers_display}) വിവരം അറിയിച്ചിട്ടുണ്ട്. ഉടൻ സഹായം എത്തും, ശാന്തരായിരിക്കുക.\n"
+                            f"(Emergency alert received. Your caregiver ({caregivers_display}) has been notified and help is on the way. Please stay calm.)"
                         )
                         background_tasks.add_task(send_whatsapp_message, sender_formatted, elder_ack)
 
-                        # 2. Urgent Emergency Alert dispatched ONLY to the Caregiver
-                        if clean_caregiver and clean_caregiver != clean_sender:
-                            print(f"[SOS ESCALATION] Alerting caregiver exclusively: +{clean_caregiver}")
-                            background_tasks.add_task(send_whatsapp_message, clean_caregiver, caregiver_alert)
+                        # 2. Urgent Emergency Alert dispatched to all Caregivers
+                        for cg in clean_caregivers:
+                            if cg != clean_sender:
+                                print(f"[SOS ESCALATION] Alerting caregiver: +{cg}")
+                                background_tasks.add_task(send_whatsapp_message, cg, caregiver_alert)
                     else:
                         # Full AI Agent Turn (LLM analyzes text, decides reply, evaluates emergency)
                         background_tasks.add_task(
@@ -188,6 +190,21 @@ async def receive_whatsapp(
     print(f"\n[TWILIO INBOUND] ID: {MessageSid} | Sender: {sender} | Text: {incoming_text}")
 
     if not From:
+        return Response(content="<Response/>", media_type="application/xml", status_code=200)
+
+    clean_sender = sender.replace("+", "").strip()
+    caregivers = get_caregiver_numbers()
+    clean_caregivers = [c.replace("whatsapp:", "").replace("+", "").strip() for c in caregivers]
+
+    # Caregiver portal connection
+    if clean_sender in clean_caregivers:
+        caregiver_welcome = (
+            "🛡️ *Sahayi Caregiver Portal Connected*\n\n"
+            "നമസ്കാരം! താങ്കൾ Sahayi കെയർഗിവറായി വിജയകരമായി ബന്ധിപ്പിക്കപ്പെട്ടു.\n"
+            f"മുതിർന്ന അംഗം ({ELDER_PHONE_NUMBER}) SOS അല്ലെങ്കിൽ അടിയന്തര സഹായം ആവശ്യപ്പെടുമ്പോൾ ഈ നമ്പറിലേക്ക് തത്സമയ മുന്നറിയിപ്പുകൾ ലഭിക്കുന്നതാണ്.\n\n"
+            "(Welcome! You are connected as emergency caregiver for Elder. You will receive real-time SOS alerts here.)"
+        )
+        background_tasks.add_task(send_whatsapp_message, From, caregiver_welcome)
         return Response(content="<Response/>", media_type="application/xml", status_code=200)
 
     # Audio note
@@ -218,13 +235,10 @@ async def receive_whatsapp(
         )
         background_tasks.add_task(send_whatsapp_message, From, elder_ack)
 
-        # 2. Caregiver alert
-        if CAREGIVER_WHATSAPP_NUMBER and caregiver_alert:
-            target_caregiver = (
-                CAREGIVER_WHATSAPP_NUMBER
-                if CAREGIVER_WHATSAPP_NUMBER.startswith("whatsapp:")
-                else f"whatsapp:{CAREGIVER_WHATSAPP_NUMBER}"
-            )
+        # 2. Caregiver alert to all configured caregivers
+        caregivers = get_caregiver_numbers()
+        for cg in caregivers:
+            target_caregiver = cg if cg.startswith("whatsapp:") else f"whatsapp:{cg}"
             if target_caregiver.lower() != From.lower():
                 print(f"[SOS ESCALATION] Alerting caregiver exclusively: {target_caregiver}")
                 background_tasks.add_task(send_whatsapp_message, target_caregiver, caregiver_alert)
