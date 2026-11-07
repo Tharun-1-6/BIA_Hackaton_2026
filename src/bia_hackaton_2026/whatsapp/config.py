@@ -13,8 +13,8 @@ META_VERIFY_TOKEN: str = os.getenv("META_VERIFY_TOKEN", "sahayi_token_2026")
 ELDER_PHONE_NUMBER: str = os.getenv("ELDER_PHONE_NUMBER", "+917012649561")
 CAREGIVER_WHATSAPP_NUMBER: str = os.getenv("CAREGIVER_WHATSAPP_NUMBER", "+919746654062")
 
-# Audio Directory
-SAHAYI_AUDIO_DIR: str = os.getenv("SAHAYI_AUDIO_DIR", "/tmp/sahayi_audio")
+# Audio Directory for saving voice messages
+SAHAYI_AUDIO_DIR: str = os.getenv("SAHAYI_AUDIO_DIR", "data/saved_audio")
 
 # Twilio Credentials (Fallback)
 TWILIO_ACCOUNT_SID: str = os.getenv("TWILIO_ACCOUNT_SID", "")
