@@ -6,8 +6,8 @@ from bia_hackaton_2026.whatsapp.config import (
     TWILIO_ACCOUNT_SID,
     TWILIO_AUTH_TOKEN,
     TWILIO_WHATSAPP_NUMBER,
-    META_ACCESS_TOKEN,
-    META_PHONE_NUMBER_ID,
+    get_meta_phone_id,
+    get_meta_token,
 )
 
 
@@ -23,11 +23,13 @@ def send_whatsapp_template(
 ) -> str:
     """Dispatches an approved Meta WhatsApp template message (can bypass 24h window)."""
     clean_number = to_number.replace("whatsapp:", "").replace("+", "").strip()
+    token = get_meta_token()
+    phone_id = get_meta_phone_id()
 
-    if META_ACCESS_TOKEN and META_PHONE_NUMBER_ID:
-        url = f"https://graph.facebook.com/v21.0/{META_PHONE_NUMBER_ID}/messages"
+    if token and phone_id:
+        url = f"https://graph.facebook.com/v21.0/{phone_id}/messages"
         headers = {
-            "Authorization": f"Bearer {META_ACCESS_TOKEN}",
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
         payload = {
@@ -70,12 +72,14 @@ def send_whatsapp_message(to_number: str, message: str) -> str:
         The message ID/SID, or empty string on failure.
     """
     clean_number = to_number.replace("whatsapp:", "").replace("+", "").strip()
+    token = get_meta_token()
+    phone_id = get_meta_phone_id()
 
     # 1. Meta WhatsApp Cloud API (Primary if configured)
-    if META_ACCESS_TOKEN and META_PHONE_NUMBER_ID:
-        url = f"https://graph.facebook.com/v21.0/{META_PHONE_NUMBER_ID}/messages"
+    if token and phone_id:
+        url = f"https://graph.facebook.com/v21.0/{phone_id}/messages"
         headers = {
-            "Authorization": f"Bearer {META_ACCESS_TOKEN}",
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
         payload = {
@@ -93,31 +97,41 @@ def send_whatsapp_message(to_number: str, message: str) -> str:
                 print(f"[META OUTBOUND SENT] ID: {msg_id} | To: +{clean_number}")
                 return str(msg_id)
             else:
+                err_code = data.get("error", {}).get("code")
+                if err_code == 190 or resp.status_code == 401:
+                    print(
+                        "\n🚨 [CRITICAL: META ACCESS TOKEN EXPIRED] (Error 190)\n"
+                        "Your Meta Temporary Access Token has expired.\n"
+                        "To fix: Go to https://developers.facebook.com -> Your App -> WhatsApp -> API Setup,\n"
+                        "copy the fresh Temporary Access Token, and paste it into META_ACCESS_TOKEN in .env\n"
+                    )
+                    return ""
                 print(f"[META OUTBOUND ERROR] Status {resp.status_code}: {data}")
         except Exception as e:
             print(f"[META OUTBOUND EXCEPTION] {e}")
 
-    # 2. Twilio (Fallback)
-    recipient = to_number if to_number.startswith("whatsapp:") else f"whatsapp:{to_number}"
-    from_number = (
-        TWILIO_WHATSAPP_NUMBER
-        if TWILIO_WHATSAPP_NUMBER.startswith("whatsapp:")
-        else f"whatsapp:{TWILIO_WHATSAPP_NUMBER}"
-    )
+    # 2. Twilio (Fallback only if Meta is not configured)
+    if not (token and phone_id):
+        recipient = to_number if to_number.startswith("whatsapp:") else f"whatsapp:{to_number}"
+        from_number = (
+            TWILIO_WHATSAPP_NUMBER
+            if TWILIO_WHATSAPP_NUMBER.startswith("whatsapp:")
+            else f"whatsapp:{TWILIO_WHATSAPP_NUMBER}"
+        )
 
-    if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
-        client = _get_twilio_client()
-        try:
-            sent_message = client.messages.create(
-                body=message,
-                from_=from_number,
-                to=recipient,
-            )
-            print(f"[TWILIO OUTBOUND SENT] SID: {sent_message.sid} | To: {recipient}")
-            return str(sent_message.sid)
-        except Exception as exc:
-            print(f"[TWILIO OUTBOUND ERROR] Failed to send WhatsApp message to {recipient}: {exc}")
-            return ""
+        if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN:
+            client = _get_twilio_client()
+            try:
+                sent_message = client.messages.create(
+                    body=message,
+                    from_=from_number,
+                    to=recipient,
+                )
+                print(f"[TWILIO OUTBOUND SENT] SID: {sent_message.sid} | To: {recipient}")
+                return str(sent_message.sid)
+            except Exception as exc:
+                print(f"[TWILIO OUTBOUND ERROR] Failed to send WhatsApp message to {recipient}: {exc}")
+                return ""
 
     return ""
 

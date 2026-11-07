@@ -1,10 +1,10 @@
 import os
 import requests
 from bia_hackaton_2026.whatsapp.config import (
-    META_ACCESS_TOKEN,
     SAHAYI_AUDIO_DIR,
     TWILIO_ACCOUNT_SID,
     TWILIO_AUTH_TOKEN,
+    get_meta_token,
 )
 
 
@@ -46,7 +46,7 @@ def download_meta_audio(media_id: str) -> str:
     os.makedirs(SAHAYI_AUDIO_DIR, exist_ok=True)
     target_path = os.path.abspath(os.path.join(SAHAYI_AUDIO_DIR, f"{media_id}.ogg"))
 
-    headers = {"Authorization": f"Bearer {META_ACCESS_TOKEN}"}
+    headers = {"Authorization": f"Bearer {get_meta_token()}"}
 
     # Step 1: Query Meta Graph API for media URL
     media_info_url = f"https://graph.facebook.com/v21.0/{media_id}"
