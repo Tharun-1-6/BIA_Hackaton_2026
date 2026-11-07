@@ -9,6 +9,7 @@ import time
 from bia_hackaton_2026.agent import run_turn
 from bia_hackaton_2026.pipeline import store
 from bia_hackaton_2026.stt.detect import detect_and_transcribe
+from bia_hackaton_2026.pipeline.guard import OFF_TOPIC_REPLY, is_coding_request, looks_like_code
 from bia_hackaton_2026.vlm import build_agent_input, describe_verified
 
 _HISTORY: dict[str, list[dict]] = {}   # chat_id -> agent conversation history (in memory)
@@ -71,6 +72,11 @@ def handle_message(
             if v["status"] != "verified" and not image_desc:
                 out["error"] = v["error"]
 
+        if is_coding_request("\n".join(parts)):  # not a wellbeing message: refuse without calling the model
+            out["reply"] = OFF_TOPIC_REPLY
+            out["seconds"] = round(time.perf_counter() - t0, 2)
+            return out
+
         agent_input = build_agent_input("\n".join(parts), image_desc)
         if not agent_input:
             out["reply"] = "I did not receive anything I could understand. Please send a message, voice note or photo."
@@ -90,6 +96,8 @@ def handle_message(
             reply=res["user_message"], alert=res["family_message"], level=turn.family.suggested_level,
             family_send=res["family_sent"], input=agent_input,
         )
+        if looks_like_code(out["reply"]):  # output guard: never send code to a member
+            out["reply"] = OFF_TOPIC_REPLY
         # Visible injury and no photo yet: ask for one (once per chat). Added after the agent's own reply.
         if image:
             _IMAGE_SEEN.add(chat_id)

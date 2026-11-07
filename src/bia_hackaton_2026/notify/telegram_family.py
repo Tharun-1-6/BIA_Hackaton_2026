@@ -8,9 +8,10 @@ import os
 import time
 
 from bia_hackaton_2026.pipeline import store
+from bia_hackaton_2026.pipeline.timeutil import fmt
 
-COOLDOWN_SECONDS = 600                      # no repeat alert of same/lower level for one member within 10 minutes
-_LAST_ALERT: dict[str, tuple[int, float]] = {}
+DUPLICATE_WINDOW = 60                       # seconds: drop only an identical alert sent again within this window
+_LAST_ALERT: dict[str, tuple[str, float]] = {}
 
 
 async def send_family_alert(bot, elder_chat_id, elder_name: str, alert_text: str, level: int) -> dict:
@@ -24,14 +25,16 @@ async def send_family_alert(bot, elder_chat_id, elder_name: str, alert_text: str
     if not targets:
         return out
 
+    # Every alert is sent: a new symptom must reach the family even if an alert went out minutes ago.
+    # Only an identical alert repeated within a minute (double-processing) is dropped.
     last = _LAST_ALERT.get(str(elder_chat_id))
-    if last and level <= last[0] and time.time() - last[1] < COOLDOWN_SECONDS:
-        out["skipped"] = "same or higher level alert already sent in the last 10 minutes"
-        out["delivered"] = ["(earlier alert)"]
+    if last and last[0] == alert_text and time.time() - last[1] < DUPLICATE_WINDOW:
+        out["skipped"] = "identical alert already sent a moment ago"
+        out["delivered"] = ["(identical alert)"]
         return out
 
     icon = {3: "🚨 EMERGENCY", 2: "⚠️ CHECK IN"}.get(level, "ℹ️ UPDATE")
-    text = (f"{icon} - SAHAYI\n\nMember: {elder_name}\n\n{alert_text.replace('*', '')}\n\n"
+    text = (f"{icon} - SAHAYI\n{fmt()}\n\nMember: {elder_name}\n\n{alert_text.replace('*', '')}\n\n"
             "Please check on them now. If it is an emergency, call 112 yourself.")
     for cid in targets:
         try:
@@ -40,5 +43,5 @@ async def send_family_alert(bot, elder_chat_id, elder_name: str, alert_text: str
         except Exception as e:  # e.g. the family member blocked the bot
             out["failed"][cid] = str(e)[:150]
     if out["delivered"]:
-        _LAST_ALERT[str(elder_chat_id)] = (level, time.time())
+        _LAST_ALERT[str(elder_chat_id)] = (alert_text, time.time())
     return out

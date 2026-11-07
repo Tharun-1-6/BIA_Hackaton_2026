@@ -3,6 +3,7 @@ Stored in SQLite (pipeline/store.py), so it survives bot restarts."""
 import time
 
 from bia_hackaton_2026.pipeline import store
+from bia_hackaton_2026.pipeline.timeutil import fmt
 
 LEVEL_NAMES = {1: "calm", 2: "check in", 3: "EMERGENCY"}
 
@@ -22,9 +23,11 @@ def is_elder(chat_id) -> bool:
 
 
 def _ago(ts: float) -> str:
+    """'12 min ago (7 Nov, 3:04 PM IST)': relative time plus the exact clock time."""
     s = int(time.time() - ts)
-    return f"{s // 86400} d {(s % 86400) // 3600} h ago" if s >= 86400 else \
+    rel = f"{s // 86400} d {(s % 86400) // 3600} h ago" if s >= 86400 else \
         f"{s // 3600} h {(s % 3600) // 60} min ago" if s >= 3600 else f"{s // 60} min ago" if s >= 60 else "just now"
+    return f"{rel} ({fmt(ts)})"
 
 
 def status_text(elders: list[dict]) -> str:

@@ -15,6 +15,8 @@ from bia_hackaton_2026.llm.family_qa import answer_family_question, rewrite_for_
 from bia_hackaton_2026.notify.telegram_family import send_family_alert
 from bia_hackaton_2026.pipeline import handle_message, reset_chat, store
 from bia_hackaton_2026.pipeline.status import activity_log, is_elder, record, status_text
+from bia_hackaton_2026.pipeline.timeutil import fmt
+from telegram.error import NetworkError, TimedOut
 from bia_hackaton_2026.stt.detect import detect_and_transcribe
 
 # Setup clean console printing format
@@ -240,11 +242,11 @@ async def relay_to_member(update: Update, context: ContextTypes.DEFAULT_TYPE, te
     for e in elders:
         try:
             await context.bot.send_message(
-                int(e["chat_id"]), f"Message from {who} (your family): {msg}\n\nYou can answer me here.")
+                int(e["chat_id"]), f"Message from {who} (your family), {fmt()}:\n{msg}\n\nYou can answer me here.")
             done.append(e["name"] or "the member")
         except Exception as ex:
             failed.append(f"{e['name'] or 'the member'} ({str(ex)[:80]})")
-    reply = (f"Sent to {', '.join(done)}: \"{msg}\"" if done else "") + \
+    reply = (f"Sent to {', '.join(done)} at {fmt()}: \"{msg}\"" if done else "") + \
             (f"\nCould not send to: {', '.join(failed)}" if failed else "")
     await update.message.reply_text(reply.strip())
     print(f"[SAHAYI] relay from family {cid}: sent={done} failed={failed}")
@@ -312,6 +314,15 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(text)
 
 
+async def on_error(update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Network hiccups reaching Telegram (ConnectTimeout, TimedOut) are logged in one line, not as a traceback."""
+    err = context.error
+    if isinstance(err, (TimedOut, NetworkError)):
+        print(f"[SAHAYI] network problem talking to Telegram ({type(err).__name__}); the message may need to be re-sent")
+        return
+    logging.error("Unhandled error", exc_info=err)
+
+
 async def set_menu(app) -> None:
     """Fill Telegram's built-in command menu (the / button next to the message box)."""
     from telegram import BotCommand
@@ -323,7 +334,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cid = update.effective_chat.id
     # One-account demo: this chat is both the member and a family contact. Questions about a third person
     # ("how is he now", "the elder", "she") go to the family Q&A; everything else stays the member conversation.
-    dual_family_question = store.is_family(cid) and is_elder(cid) and THIRD_PERSON.search(text)
+    dual_family_question = store.is_family(cid) and is_elder(cid) and (RELAY_INTENT.match(text) or THIRD_PERSON.search(text))
     if is_family_chat(update) or dual_family_question:
         await family_question(update, context, text)
         return
@@ -337,6 +348,16 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         stt = await asyncio.to_thread(detect_and_transcribe, data, "voice.ogg")
         await family_question(update, context, stt["text"])
         return
+    if store.is_family(update.effective_chat.id) and is_elder(update.effective_chat.id):
+        # One-account demo: decide by what was said, exactly like text ("tell him to relax" is a family request)
+        stt = await asyncio.to_thread(detect_and_transcribe, data, "voice.ogg")
+        said = stt["text"]
+        if said and (RELAY_INTENT.match(said) or THIRD_PERSON.search(said)):
+            await family_question(update, context, said)
+            return
+        if said:
+            await respond(update, context, text=said)
+            return
     # Telegram voice notes are OGG/Opus; our STT accepts them as is
     await respond(update, context, text=update.message.caption or "", audio=(data, "voice.ogg"))
 
@@ -355,7 +376,9 @@ async def on_image_document(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 if __name__ == '__main__':
     load_dotenv()
-    app = ApplicationBuilder().token(os.environ["TELEGRAM_TOKEN"]).post_init(set_menu).build()
+    app = (ApplicationBuilder().token(os.environ["TELEGRAM_TOKEN"]).post_init(set_menu)
+           .connect_timeout(20).read_timeout(30).write_timeout(30).pool_timeout(20).build())
+    app.add_error_handler(on_error)
 
     # 1. This prints ALL interactions to the console (Type filters.ALL catches text, photos, stickers, commands, etc.)
     app.add_handler(MessageHandler(filters.ALL, log_interaction), group=-1)
