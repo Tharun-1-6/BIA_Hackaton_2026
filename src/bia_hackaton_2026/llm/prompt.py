@@ -3,7 +3,10 @@
 The JSON shape at the bottom must stay in sync with message_processor/schema.py (Turn).
 """
 
-REPLY_LANGUAGE = "English"  # language of user.text / user.follow_up; family.summary is always English
+REPLY_LANGUAGE = (
+    "the language matching the user (warm Malayalam with brief English reassurance if the user "
+    "used Malayalam, or English if the user used English)"
+)  # user.text/user.follow_up adapts to user's language; family.summary is always English
 
 
 def build_system_prompt(reply_language: str = REPLY_LANGUAGE) -> str:

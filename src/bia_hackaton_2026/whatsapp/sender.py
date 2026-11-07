@@ -171,5 +171,75 @@ def place_voice_call(to_number: str, twiml_message: str) -> str:
         return ""
 
 
+def send_whatsapp_audio(to_number: str, audio_path: str) -> str:
+    """Dispatches outbound audio/voice message via Meta Cloud API.
+
+    Uploads local audio file to Meta Media endpoint and sends as audio message.
+    """
+    clean_number = to_number.replace("whatsapp:", "").replace("+", "").strip()
+    token = get_meta_token()
+    phone_id = get_meta_phone_id()
+
+    if not (token and phone_id):
+        print("[META AUDIO OUTBOUND] Meta credentials not configured.")
+        return ""
+
+    from pathlib import Path
+    path = Path(audio_path)
+    if not path.exists():
+        print(f"[META AUDIO OUTBOUND ERROR] File not found: {audio_path}")
+        return ""
+
+    mime = "audio/mpeg" if path.suffix.lower() == ".mp3" else "audio/ogg"
+
+    # 1. Upload audio to Meta Graph API
+    media_url = f"https://graph.facebook.com/v21.0/{phone_id}/media"
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        with open(path, "rb") as f:
+            upload_resp = requests.post(
+                media_url,
+                headers=headers,
+                data={"messaging_product": "whatsapp"},
+                files={"file": (path.name, f.read(), mime)},
+                timeout=20,
+            )
+        if upload_resp.status_code not in (200, 201):
+            print(f"[META AUDIO UPLOAD ERROR] Status {upload_resp.status_code}: {upload_resp.text}")
+            return ""
+
+        media_id = upload_resp.json().get("id")
+        if not media_id:
+            print("[META AUDIO UPLOAD ERROR] No media id returned.")
+            return ""
+
+        # 2. Dispatch audio message
+        msg_url = f"https://graph.facebook.com/v21.0/{phone_id}/messages"
+        msg_payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": clean_number,
+            "type": "audio",
+            "audio": {"id": media_id},
+        }
+        send_resp = requests.post(
+            msg_url,
+            headers={**headers, "Content-Type": "application/json"},
+            json=msg_payload,
+            timeout=15,
+        )
+        data = send_resp.json()
+        if send_resp.status_code in (200, 201):
+            msg_id = data.get("messages", [{}])[0].get("id", "META_AUDIO_SENT")
+            print(f"[META AUDIO OUTBOUND SENT] ID: {msg_id} | To: +{clean_number}")
+            return str(msg_id)
+        else:
+            print(f"[META AUDIO SEND ERROR] Status {send_resp.status_code}: {data}")
+            return ""
+    except Exception as e:
+        print(f"[META AUDIO EXCEPTION] {e}")
+        return ""
+
+
 # Teammate interface alias: maps send_message directly to real WhatsApp Meta API
 send_message = send_whatsapp_message

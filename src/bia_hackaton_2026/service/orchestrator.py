@@ -22,9 +22,11 @@ from bia_hackaton_2026.whatsapp.config import (
 )
 from bia_hackaton_2026.whatsapp.interactive_actions import handle_member_sos
 from bia_hackaton_2026.whatsapp.sender import (
+    send_whatsapp_audio,
     send_whatsapp_message,
     send_whatsapp_template,
 )
+from bia_hackaton_2026.ai.tts import synthesize_speech
 
 # In-memory conversation history per phone number (persisted to disk)
 _MEMORY_DIR = Path("data/memory")
@@ -131,6 +133,7 @@ def process_inbound_text(
     sender_phone: str,
     text: str,
     role: str = "USER",
+    send_audio_reply: bool = False,
 ) -> Dict[str, Any]:
     """Processes inbound text message using the complete AI agent pipeline."""
     clean_sender = sender_phone.replace("whatsapp:", "").replace("+", "").strip()
@@ -169,6 +172,18 @@ def process_inbound_text(
             family_phone=",".join(clean_caregivers),
         )
         save_user_history(sender_phone, history)
+
+        # Dispatch spoken voice note reply if audio requested or replying to voice message
+        if send_audio_reply:
+            user_reply_text = turn_result.get("user_message", "")
+            if user_reply_text:
+                try:
+                    speech_path = synthesize_speech(user_reply_text)
+                    if speech_path:
+                        send_whatsapp_audio(sender_phone, speech_path)
+                except Exception as tts_err:
+                    print(f"[VOICE REPLY DISPATCH WARNING] {tts_err}")
+
         return {"action": "AGENT_TURN", "details": turn_result}
     except Exception as e:
         print(f"[AGENT RUNNER WARNING] Falling back to default care agent: {e}")
@@ -185,6 +200,15 @@ def process_inbound_text(
 
     reply_text = ai_result.get("response_text", f"Sahayi: സന്ദേശം ലഭിച്ചു '{text}'.")
     msg_id = send_whatsapp_message(sender_phone, reply_text)
+
+    if send_audio_reply:
+        try:
+            speech_path = synthesize_speech(reply_text)
+            if speech_path:
+                send_whatsapp_audio(sender_phone, speech_path)
+        except Exception as tts_err:
+            print(f"[VOICE REPLY DISPATCH WARNING] {tts_err}")
+
     return {"action": "CONVERSATIONAL_REPLY", "reply_text": reply_text, "message_id": msg_id}
 
 
@@ -215,9 +239,9 @@ def process_inbound_voice(
     if not transcription and audio_file.exists():
         transcription = transcribe_audio(audio_path) or ""
 
-    # 3. If speech was transcribed, feed directly into LLM Agent Turn!
+    # 3. If speech was transcribed, feed directly into LLM Agent Turn with audio reply enabled!
     if transcription:
-        return process_inbound_text(sender_phone, transcription, role=role)
+        return process_inbound_text(sender_phone, transcription, role=role, send_audio_reply=True)
 
     # 4. Fallback if no STT configured or empty audio
     fallback_msg = (

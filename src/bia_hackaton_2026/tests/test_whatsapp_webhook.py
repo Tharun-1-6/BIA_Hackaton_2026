@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import patch
 from fastapi.testclient import TestClient
 
@@ -331,3 +332,17 @@ def test_whatsapp_webhook_audio_attachment() -> None:
         mock_send.assert_called_once()
         args, _ = mock_send.call_args
         assert "വോയ്സ് സന്ദേശം ലഭിച്ചു" in args[1]
+
+
+def test_speech_synthesis_and_audio_dispatch(tmp_path) -> None:
+    """Verifies that speech is synthesized for Malayalam/English responses."""
+    from bia_hackaton_2026.ai.tts import synthesize_speech, contains_malayalam
+
+    assert contains_malayalam("സുഖമാണോ?") is True
+    assert contains_malayalam("How are you?") is False
+
+    ml_audio = synthesize_speech("സുഖമാണോ?")
+    assert ml_audio is not None
+    assert ml_audio.endswith(".mp3")
+    assert Path(ml_audio).exists()
+    assert Path(ml_audio).stat().st_size > 0

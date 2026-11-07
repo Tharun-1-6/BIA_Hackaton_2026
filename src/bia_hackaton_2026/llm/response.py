@@ -1,14 +1,15 @@
 """LLM call for the Sahayi agent (Groq-hosted with multi-model fallback). The prompt lives in prompt.py."""
 import json
 import os
+from dotenv import load_dotenv
 
 from groq import Groq
 
 from bia_hackaton_2026.llm.prompt import SYSTEM_PROMPT
 
-# Preferred Groq models
-MODEL = "llama-3.3-70b-versatile"
-MODELS = ("llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-120b")
+# Preferred Groq models (verified accessible and active)
+MODEL = "openai/gpt-oss-120b"
+MODELS = ("openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b")
 
 
 def ask_llm(
@@ -19,12 +20,13 @@ def ask_llm(
     system_prompt: str = SYSTEM_PROMPT,
 ) -> str:
     """Returns the model's JSON reply as a string (parsed/validated by the caller)."""
+    load_dotenv(override=True)
     key = (api_key or os.environ.get("GROQ_API_KEY") or "").strip()
 
-    # 1. Groq Provider
+    # 1. Groq Provider (Ultra-fast intelligence)
     if key:
         client = Groq(api_key=key)
-        for candidate_model in (model, "llama-3.3-70b-versatile", "llama-3.1-8b-instant"):
+        for candidate_model in (model, "openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"):
             try:
                 r = client.chat.completions.create(
                     model=candidate_model,
@@ -34,10 +36,9 @@ def ask_llm(
                         {"role": "user", "content": user_input},
                     ],
                     response_format={"type": "json_object"},
-                    reasoning_effort="low" if "gpt-oss" in candidate_model else None,
                     temperature=0.2,
                 )
-                if r.choices[0].message.content:
+                if r.choices and r.choices[0].message.content:
                     return r.choices[0].message.content
             except Exception as e:
                 print(f"[LLM GROQ WARNING] Model {candidate_model} failed: {e}")

@@ -25,6 +25,8 @@ def transcribe_audio(audio_file_path: str) -> Optional[str]:
         return None
 
     # 1. Groq Whisper (Primary - blazing fast Malayalam/English STT)
+    from dotenv import load_dotenv
+    load_dotenv(override=True)
     groq_api_key = os.getenv("GROQ_API_KEY")
     if groq_api_key:
         try:
@@ -35,6 +37,7 @@ def transcribe_audio(audio_file_path: str) -> Optional[str]:
                 transcription = client.audio.transcriptions.create(
                     file=(path.name, audio_file.read()),
                     model="whisper-large-v3",
+                    prompt="Malayalam and English speech from an elderly person: സുഖമാണോ, എനിക്ക് സുഖമില്ല, തലകറക്കം, നെഞ്ചുവേദന, വീണു, വേദന, സഹായം, പനി, മരുന്ന്, Sahayi",
                     response_format="text",
                 )
             text = str(transcription).strip()

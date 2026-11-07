@@ -24,6 +24,12 @@ def get_caregiver_numbers() -> List[str]:
     return [n.strip() for n in raw.split(",") if n.strip()]
 
 
+def get_groq_api_key() -> str:
+    """Dynamically reads the latest GROQ_API_KEY from environment."""
+    load_dotenv(override=True)
+    return os.getenv("GROQ_API_KEY", "").strip()
+
+
 # Meta WhatsApp Cloud API Credentials
 META_ACCESS_TOKEN: str = get_meta_token()
 META_PHONE_NUMBER_ID: str = get_meta_phone_id()
@@ -35,6 +41,9 @@ CAREGIVER_WHATSAPP_NUMBER: str = os.getenv("CAREGIVER_WHATSAPP_NUMBER", "+917736
 
 # Audio Directory for saving voice messages
 SAHAYI_AUDIO_DIR: str = os.getenv("SAHAYI_AUDIO_DIR", "data/saved_audio")
+
+# AI / Groq Credentials
+GROQ_API_KEY: str = get_groq_api_key()
 
 # Twilio Credentials (Fallback)
 TWILIO_ACCOUNT_SID: str = os.getenv("TWILIO_ACCOUNT_SID", "")
