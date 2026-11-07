@@ -1,5 +1,6 @@
 """One agent turn. Same flow as process_message() in the repo-root main.py (retry once, fallback
 Turn, family-send rule), but returns everything so the Streamlit UI can display it."""
+import os
 import sys
 import time
 
@@ -16,14 +17,24 @@ try:
 except Exception:
     pass
 
-USER_PHONE = "+919876543210"      # example numbers, as in main.py
-FAMILY_PHONE = "+919876543211"
+USER_PHONE = os.getenv("ELDER_PHONE_NUMBER", "+917012649561")
+FAMILY_PHONE = os.getenv("CAREGIVER_WHATSAPP_NUMBER", "+917736246747")
 MEMORY_LIMIT = 20                 # plain truncation of old messages, as in main.py
 
 
-def run_turn(user_input: str, history: list[dict], model: str = MODEL, api_key: str | None = None) -> dict:
+def run_turn(
+    user_input: str,
+    history: list[dict],
+    model: str = MODEL,
+    api_key: str | None = None,
+    user_phone: str | None = None,
+    family_phone: str | None = None,
+) -> dict:
     """Appends the exchange to `history` (in place). Returns dict with turn, messages, send flag,
     raw LLM output, attempts, fallback flag, error, seconds, model."""
+    target_user = user_phone or USER_PHONE
+    target_family = family_phone or FAMILY_PHONE
+
     t0 = time.perf_counter()
     raw, error, turn, attempts = "", "", None, 0
     for attempt in range(2):
@@ -49,10 +60,10 @@ def run_turn(user_input: str, history: list[dict], model: str = MODEL, api_key: 
 
     user_message = format_user_message(turn)
     family_message = format_family_message(turn)
-    send_message(USER_PHONE, user_message)  # prints to the terminal (WhatsApp API not integrated yet)
+    send_message(target_user, user_message)
     family_sent = bool(turn.family.send or turn.family.suggested_level >= 2)
     if family_sent:
-        send_message(FAMILY_PHONE, family_message)
+        send_message(target_family, family_message)
 
     history += [
         {"role": "user", "content": user_input},
