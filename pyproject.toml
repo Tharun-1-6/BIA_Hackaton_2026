@@ -36,6 +36,7 @@ dependencies = [
     "pydantic>=2.14.3",
     "pydantic-settings>=2.16.2",
     "pypdf>=7.0.0",
+    "pytest>=9.2.0",
     "python-dotenv>=1.2.4",
     "python-multipart>=0.0.33",
     "ragas>=0.4.3",
@@ -60,3 +61,6 @@ bia-hackaton-2026 = "bia_hackaton_2026:main"
 [build-system]
 requires = ["uv_build>=0.12.13,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

@@ -42,3 +42,4 @@ data/raw/
 models/
 *.sqlite3
 
+memory.json
