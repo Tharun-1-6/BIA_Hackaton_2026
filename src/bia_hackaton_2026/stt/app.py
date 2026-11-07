@@ -1,8 +1,10 @@
+import hashlib
 import os
 
 import streamlit as st
 from dotenv import load_dotenv
 
+from bia_hackaton_2026.vlm import build_agent_input, describe_image
 from bia_hackaton_2026.stt.detect import MODELS, classify_text, detect_and_transcribe, timed_step
 
 load_dotenv()
@@ -22,6 +24,8 @@ MODES = {"en": "language=en", "ml": "transcribe", "ml-mix": "codemix"}
 st.session_state.setdefault("widget_gen", 0)
 st.session_state.setdefault("history", [])
 st.session_state.setdefault("result", None)
+st.session_state.setdefault("img_gen", 0)
+st.session_state.setdefault("img_result", None)
 gen = st.session_state.widget_gen
 
 
@@ -29,6 +33,12 @@ def clear_audio():
     """Delete the current audio and its result so a new one can be added."""
     st.session_state.widget_gen += 1
     st.session_state.result = None
+
+
+def clear_image():
+    """Delete the current image and its description so a new one can be added."""
+    st.session_state.img_gen += 1
+    st.session_state.img_result = None
 
 
 with st.sidebar:
@@ -100,6 +110,56 @@ if res:
             st.code(res["first_pass"], language=None)
         if res["error"]:
             st.warning(res["error"])
+
+st.divider()
+st.subheader("🖼️ Image (optional)")
+img_up = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png", "webp"], key=f"img_up_{st.session_state.img_gen}")
+img_cam = st.camera_input("…or take a photo", key=f"img_cam_{st.session_state.img_gen}")
+image = img_up or img_cam
+if image:
+    st.image(image, width=300)
+typed_text = st.text_input("Extra text to send with the image (optional)")
+
+def run_vlm(img, digest):
+    with st.spinner("Analysing image…"):
+        st.session_state.img_result = describe_image(
+            img.getvalue(), img.type or "image/jpeg", "", groq_key
+        ) | {"fname": img.name or "photo", "size_kb": round(len(img.getvalue()) / 1024, 1), "digest": digest}
+
+
+i1, i2 = st.columns(2)
+redo = i1.button("Re-describe image", disabled=image is None, use_container_width=True)
+i2.button("🗑️ Delete image / new image", on_click=clear_image, disabled=image is None, use_container_width=True)
+
+# Auto-describe: runs as soon as a new image appears (or on re-describe), no button needed
+if image is not None:
+    digest = hashlib.md5(image.getvalue()).hexdigest()
+    cur = st.session_state.img_result
+    if redo or cur is None or cur.get("digest") != digest:
+        run_vlm(image, digest)
+
+ir = st.session_state.img_result
+if ir:
+    if ir["description"]:
+        st.success(f"VLM: {ir['model']} · {ir['seconds']} s · {ir['fname']} ({ir['size_kb']} KB)")
+        st.markdown(ir["description"])
+    else:
+        st.error(ir["error"])
+
+st.divider()
+st.subheader("📨 Combined message for the LLM agent")
+transcript = res["text"] if res and res["text"] else ""
+user_text = "\n".join(t for t in (transcript, typed_text.strip()) if t)
+combined = build_agent_input(user_text, ir["description"] if ir else "")
+if combined:
+    st.code(combined, language=None)
+    st.caption(
+        f"Sources used: voice transcript = {'yes' if transcript else 'no'} · "
+        f"typed text = {'yes' if typed_text.strip() else 'no'} · "
+        f"image description = {'yes' if ir and ir['description'] else 'no'}"
+    )
+else:
+    st.caption("Transcribe audio and/or describe an image to build the message.")
 
 if st.session_state.history:
     st.subheader("History")
