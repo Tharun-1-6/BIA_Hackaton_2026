@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 from bia_hackaton_2026.agent import run_turn
 from bia_hackaton_2026.llm.response import MODELS as LLM_MODELS
-from bia_hackaton_2026.vlm import build_agent_input, describe_image
+from bia_hackaton_2026.vlm import build_agent_input, describe_verified
 from bia_hackaton_2026.stt.detect import MODELS, classify_text, detect_and_transcribe, timed_step
 
 load_dotenv()
@@ -48,6 +48,7 @@ def clear_image():
 with st.sidebar:
     st.header("API keys")
     groq_key = st.text_input("Groq API key", value=os.environ.get("GROQ_API_KEY", ""), type="password")
+    gemini_key = st.text_input("Gemini API key (image cross-check)", value=os.environ.get("GEMINI_API_KEY", ""), type="password")
     sarvam_key = st.text_input("Sarvam API key", value=os.environ.get("SARVAM_AI", ""), type="password")
     llm_model = st.selectbox("Agent LLM (Groq)", LLM_MODELS)
     st.divider()
@@ -126,9 +127,9 @@ if image:
 typed_text = st.text_input("Extra text to send with the image (optional)")
 
 def run_vlm(img, digest):
-    with st.spinner("Analysing image…"):
-        st.session_state.img_result = describe_image(
-            img.getvalue(), img.type or "image/jpeg", "", groq_key
+    with st.spinner("Analysing image with two models and a judge…"):
+        st.session_state.img_result = describe_verified(
+            img.getvalue(), img.type or "image/jpeg", groq_key, gemini_key
         ) | {"fname": img.name or "photo", "size_kb": round(len(img.getvalue()) / 1024, 1), "digest": digest}
 
 
@@ -146,8 +147,27 @@ if image is not None:
 ir = st.session_state.img_result
 if ir:
     if ir["description"]:
-        st.success(f"VLM: {ir['model']} · {ir['seconds']} s · {ir['fname']} ({ir['size_kb']} KB)")
+        if ir["status"] == "verified":
+            badge = {"high": "✅ Models agree", "partial": "🟡 Minor differences", "low": "🔴 Models disagree"}.get(
+                ir["agreement"], "Checked")
+            st.success(f"{badge} · final description chosen by judge ({ir['judge_model']}) · {ir['seconds']} s · "
+                       f"{ir['fname']} ({ir['size_kb']} KB)")
+        else:
+            st.warning(f"⚠️ Not cross-checked ({ir['status']}). {ir['error']}")
+        if ir["needs_human_review"]:
+            st.error("A human should look at this image: the models disagree or the image is unclear.")
         st.markdown(ir["description"])
+        with st.expander("🔎 Image analysis notes (both models + judge)"):
+            st.markdown(
+                f"- **Winner:** {ir['winner'] or '-'} · **Agreement:** {ir['agreement'] or '-'}\n"
+                f"- **Judge reasoning:** {ir['reasoning'] or '-'}\n"
+                f"- **Discrepancies:** {'; '.join(ir['discrepancies']) if ir['discrepancies'] else 'none'}"
+            )
+            ca, cb = st.columns(2)
+            for col, key, title in ((ca, "a", "Model A"), (cb, "b", "Model B")):
+                r = ir[key]
+                col.markdown(f"**{title}: {r['model']}** · {r['seconds']} s")
+                col.markdown(r["description"] or f"_failed: {r['error']}_")
     else:
         st.error(ir["error"])
 

@@ -21,7 +21,8 @@ FAMILY_PHONE = "+919876543211"
 MEMORY_LIMIT = 20                 # plain truncation of old messages, as in main.py
 
 
-def run_turn(user_input: str, history: list[dict], model: str = MODEL, api_key: str | None = None) -> dict:
+def run_turn(user_input: str, history: list[dict], model: str = MODEL, api_key: str | None = None,
+             send: bool = True) -> dict:
     """Appends the exchange to `history` (in place). Returns dict with turn, messages, send flag,
     raw LLM output, attempts, fallback flag, error, seconds, model."""
     t0 = time.perf_counter()
@@ -49,10 +50,11 @@ def run_turn(user_input: str, history: list[dict], model: str = MODEL, api_key: 
 
     user_message = format_user_message(turn)
     family_message = format_family_message(turn)
-    send_message(USER_PHONE, user_message)  # prints to the terminal (WhatsApp API not integrated yet)
     family_sent = bool(turn.family.send or turn.family.suggested_level >= 2)
-    if family_sent:
-        send_message(FAMILY_PHONE, family_message)
+    if send:  # transports that deliver messages themselves (Telegram) pass send=False
+        send_message(USER_PHONE, user_message)  # prints to the terminal
+        if family_sent:
+            send_message(FAMILY_PHONE, family_message)
 
     history += [
         {"role": "user", "content": user_input},

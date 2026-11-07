@@ -1,0 +1,98 @@
+"""Transport-neutral inbound pipeline: voice/text/photo in -> Sahayi agent out.
+
+Used by the Telegram bot (and can be used by Streamlit or any other transport).
+Everything here is synchronous; async callers should run it in a thread.
+"""
+import threading
+import time
+
+from bia_hackaton_2026.agent import run_turn
+from bia_hackaton_2026.stt.detect import detect_and_transcribe
+from bia_hackaton_2026.vlm import build_agent_input, describe_verified
+
+_HISTORY: dict[str, list[dict]] = {}   # chat_id -> agent conversation history (in memory)
+_LOCKS: dict[str, threading.Lock] = {}
+_IMAGE_SEEN: set[str] = set()    # chats that already sent a photo
+_IMAGE_ASKED: set[str] = set()   # chats we already asked for a photo (ask once, do not nag)
+
+PHOTO_REQUEST = "If you can, please send me a photo of it. It will help your family and care team understand."
+
+
+def _lock(chat_id: str) -> threading.Lock:
+    return _LOCKS.setdefault(chat_id, threading.Lock())
+
+
+def reset_chat(chat_id) -> None:
+    _HISTORY.pop(str(chat_id), None)
+    _IMAGE_SEEN.discard(str(chat_id))
+    _IMAGE_ASKED.discard(str(chat_id))
+
+
+def handle_message(
+    chat_id,
+    text: str = "",
+    audio: tuple[bytes, str] | None = None,    # (bytes, filename) e.g. a Telegram voice note
+    image: tuple[bytes, str] | None = None,    # (bytes, mime) e.g. a Telegram photo
+    llm_model: str | None = None,
+) -> dict:
+    """Process one inbound message. Returns dict:
+    reply (text for the user), alert (family alert text), level, family_send, transcript, language,
+    image_status, image_review, asked_image, input (what the LLM saw), seconds, error."""
+    chat_id = str(chat_id)
+    t0 = time.perf_counter()
+    out = {"reply": "", "alert": "", "level": 1, "family_send": False, "transcript": "", "language": "",
+           "image_status": "", "image_review": False, "asked_image": False, "input": "", "seconds": 0.0, "error": ""}
+
+    with _lock(chat_id):  # one message at a time per chat keeps conversation history ordered
+        parts = []
+        if text.strip():
+            parts.append(text.strip())
+
+        if audio:
+            stt = detect_and_transcribe(audio[0], audio[1])
+            out["language"] = stt["language"]
+            if stt["text"]:
+                out["transcript"] = stt["text"]
+                parts.append(stt["text"])
+            elif not parts and not image:
+                out["error"] = stt["error"] or "Could not transcribe the voice message."
+                out["reply"] = "Sorry, I could not hear that clearly. Could you please say it again?"
+                out["seconds"] = round(time.perf_counter() - t0, 2)
+                return out
+
+        image_desc = ""
+        if image:
+            v = describe_verified(image[0], image[1])
+            image_desc = v["description"]
+            out["image_status"] = v["status"]
+            out["image_review"] = bool(v["needs_human_review"])
+            if v["status"] != "verified" and not image_desc:
+                out["error"] = v["error"]
+
+        agent_input = build_agent_input("\n".join(parts), image_desc)
+        if not agent_input:
+            out["reply"] = "I did not receive anything I could understand. Please send a message, voice note or photo."
+            out["seconds"] = round(time.perf_counter() - t0, 2)
+            return out
+
+        history = _HISTORY.setdefault(chat_id, [])
+        kw = {"model": llm_model} if llm_model else {}
+        # send=False: the transport (Telegram) delivers messages itself
+        res = run_turn(agent_input, history, send=False, **kw)
+        turn = res["turn"]
+        out.update(
+            reply=res["user_message"], alert=res["family_message"], level=turn.family.suggested_level,
+            family_send=res["family_sent"], input=agent_input,
+        )
+        # Visible injury and no photo yet: ask for one (once per chat). Added after the agent's own reply.
+        if image:
+            _IMAGE_SEEN.add(chat_id)
+        elif turn.user.request_image and chat_id not in _IMAGE_SEEN and chat_id not in _IMAGE_ASKED:
+            _IMAGE_ASKED.add(chat_id)
+            out["reply"] = out["reply"] + "\n\n" + PHOTO_REQUEST
+            out["asked_image"] = True
+        if res["fallback"]:
+            out["error"] = res["error"] or "Agent output was invalid; fallback reply used."
+
+    out["seconds"] = round(time.perf_counter() - t0, 2)
+    return out
