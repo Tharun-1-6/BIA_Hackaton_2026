@@ -155,3 +155,7 @@ def place_voice_call(to_number: str, twiml_message: str) -> str:
     except Exception as exc:
         print(f"[VOICE CALL ERROR] Failed to place call to {recipient}: {exc}")
         return ""
+
+
+# Teammate interface alias: maps send_message directly to real WhatsApp Meta API
+send_message = send_whatsapp_message
