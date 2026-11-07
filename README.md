@@ -4,16 +4,13 @@ Gen AI Hackathon Project repository.
 
 ## Setup Instructions
 
-### 1. Environment Setup
+### 1. Setup
 ```powershell
-# Create virtual environment
-uv venv .venv --python 3.11
-
-# Activate virtual environment (PowerShell)
-.\.venv\Scripts\Activate.ps1
+uv sync   # creates .venv (Python 3.13) and installs everything from uv.lock
 ```
 
-### 2. Install Dependencies
+### 2. Run
 ```powershell
-uv pip install -r requirements.txt
+uv run bia-hackaton-2026
+uv add <package>   # add a dependency
 ```
