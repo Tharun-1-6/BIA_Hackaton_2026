@@ -47,3 +47,6 @@ memory.json
 
 # Telegram family registry (chat IDs)
 src/bia_hackaton_2026/notify/family_chats.json
+
+# Sahayi database (private conversations, family links)
+data/

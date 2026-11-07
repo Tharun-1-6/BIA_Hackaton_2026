@@ -8,8 +8,13 @@ from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-from bia_hackaton_2026.notify.telegram_family import add_family, remove_family, send_family_alert
-from bia_hackaton_2026.pipeline import handle_message, reset_chat
+import time
+
+from bia_hackaton_2026.llm.family_qa import answer_family_question
+from bia_hackaton_2026.notify.telegram_family import send_family_alert
+from bia_hackaton_2026.pipeline import handle_message, reset_chat, store
+from bia_hackaton_2026.pipeline.status import activity_log, is_elder, record, status_text
+from bia_hackaton_2026.stt.detect import detect_and_transcribe
 
 # Setup clean console printing format
 logging.basicConfig(
@@ -24,7 +29,7 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 WELCOME = (
     "Hello, I am Sahayi, your assistant. You can talk to me in English or Malayalam.\n\n"
     "Send me a voice message, a text message or a photo, and tell me how you are or what you need. "
-    "I will listen and answer."
+    "I will listen and answer. Send /help to see everything I can do."
 )
 ALERT_FAILED = (
     "I could not reach your family contact just now. Please call them yourself. "
@@ -89,6 +94,7 @@ async def respond(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str 
         return
 
     await update.effective_message.reply_text(out["reply"] or FRIENDLY_ERROR)
+    record(chat_id, update.effective_user.first_name or "A Sahayi user", out)  # so family can ask about them
 
     # Console summary for the team (family alert delivery comes next, so it is only logged for now)
     print(f"[SAHAYI] chat={chat_id} level={out['level']} family_send={out['family_send']} "
@@ -109,31 +115,183 @@ async def respond(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Activate the bot for this chat and start a fresh conversation."""
     reset_chat(update.effective_chat.id)
+    code = store.get_or_create_elder(update.effective_chat.id, update.effective_user.first_name or "")
     await update.message.reply_text(WELCOME)
+    await update.message.reply_text(
+        f"Your family code is: {code}\n\n"
+        "Share it with the family members you trust. They send this to me:\n"
+        f"/family {code}\n"
+        "and then they get alerts and can ask how you are. Send /newcode to disconnect everyone and get a new code."
+    )
+
+
+async def my_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show this member's family code and who is connected."""
+    cid = update.effective_chat.id
+    code = store.get_or_create_elder(cid, update.effective_user.first_name or "")
+    fam = store.families_of(cid)
+    names = ", ".join(fam.values()) if fam else "nobody yet"
+    await update.message.reply_text(
+        f"Your family code: {code}\nConnected family: {names}\n\n"
+        "Family members send /family " + code + " to join. Send /newcode to disconnect everyone and get a new code."
+    )
+
+
+async def new_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Disconnect every family member of this member and issue a new code."""
+    cid = update.effective_chat.id
+    store.get_or_create_elder(cid, update.effective_user.first_name or "")
+    removed = store.unlink_all_for_elder(cid)
+    code = store.regenerate_code(cid)
+    await update.message.reply_text(
+        f"Done. {removed} family member(s) disconnected.\nYour new family code: {code}\n"
+        f"Family members join again with: /family {code}"
+    )
+
+
+_JOIN_FAILS: dict[str, list[float]] = {}   # chat_id -> timestamps of wrong codes (brute-force guard)
 
 
 async def family_join(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """A family member sends /family to receive Sahayi alerts in this chat."""
-    user = update.effective_user
-    add_family(update.effective_chat.id, user.first_name or "family")
+    """A family member sends /family CODE to connect to a member and receive their alerts."""
+    cid = str(update.effective_chat.id)
+    if not context.args:
+        await update.message.reply_text("To connect, ask the member for their family code and send:\n/family CODE")
+        return
+    recent = [t for t in _JOIN_FAILS.get(cid, []) if time.time() - t < 600]
+    if len(recent) >= 5:
+        await update.message.reply_text("Too many wrong codes. Please wait 10 minutes and try again.")
+        return
+    elder = store.elder_by_code(context.args[0])
+    if not elder:
+        _JOIN_FAILS[cid] = recent + [time.time()]
+        await update.message.reply_text("That code is not valid. Please check it with the member and try again.")
+        return
+    store.link_family(cid, update.effective_user.first_name or "family", elder["chat_id"])
     await update.message.reply_text(
-        "You are now registered as a family contact. You will get a message here when Sahayi "
-        "thinks a member needs attention. Send /stopfamily to stop."
+        f"You are now connected as family of {elder['name'] or 'the member'}. You will get a message here when "
+        "Sahayi thinks they need attention.\n\n"
+        "You can ask me about them any time:\n"
+        "/status - latest summary and alerts\n"
+        "or just type a question, for example: How is she today? What did she say last?\n\n"
+        "Send /stopfamily to disconnect."
     )
 
 
 async def family_leave(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    gone = remove_family(update.effective_chat.id)
-    await update.message.reply_text("You will no longer get family alerts." if gone else "You were not registered.")
+    gone = store.unlink_family(update.effective_chat.id)
+    await update.message.reply_text("You are disconnected and will no longer get family alerts." if gone else "You were not connected.")
+
+
+def is_family_chat(update: Update) -> bool:
+    """Connected family member who is not themselves a senior using the bot (one-account demos keep the senior flow)."""
+    cid = update.effective_chat.id
+    return store.is_family(cid) and not is_elder(cid)
+
+
+NOT_FAMILY = "You are not connected to any member. Ask them for their family code and send /family CODE."
+
+
+async def family_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    elders = store.elders_of(update.effective_chat.id)
+    if not elders:
+        await update.message.reply_text(NOT_FAMILY)
+        return
+    await update.message.reply_text(status_text(elders))
+
+
+async def family_question(update: Update, context: ContextTypes.DEFAULT_TYPE, question: str) -> None:
+    """Answer a family member's question about the senior from the activity log."""
+    question = (question or "").strip()
+    if not question:
+        await update.message.reply_text("Ask me something about them, for example: How is she today?")
+        return
+    await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
+    elders = store.elders_of(update.effective_chat.id)
+    try:
+        answer = await asyncio.to_thread(answer_family_question, question, activity_log(elders))
+    except Exception:
+        logging.exception("family Q&A failed")
+        answer = "Sorry, I could not look that up just now. Send /status for the latest summary."
+    await update.message.reply_text(answer or "I do not have that information.")
+
+
+async def family_ask(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/ask <question> - works even if the same account is also a senior (one-account demo)."""
+    if not store.is_family(update.effective_chat.id):
+        await update.message.reply_text(NOT_FAMILY)
+        return
+    await family_question(update, context, " ".join(context.args))
+
+
+# Command menu: shown in Telegram's "/" menu and by /help
+COMMANDS = [
+    ("start", "Start Sahayi and get your family code"),
+    ("help", "Show everything I can do"),
+    ("code", "Show your family code and who is connected"),
+    ("newcode", "Disconnect all family and get a new code"),
+    ("family", "Family: connect to a member with /family CODE"),
+    ("status", "Family: latest summary of the member"),
+    ("ask", "Family: ask about the member"),
+    ("stopfamily", "Family: disconnect from the member"),
+]
+
+HELP_MEMBER = (
+    "Sahayi - help for you\n\n"
+    "Just talk to me: send a voice message, a text or a photo, in English or Malayalam.\n"
+    "If you are hurt or unwell I will tell you what to do and let your family know.\n\n"
+    "Commands:\n"
+    "/start - begin a fresh conversation and get your family code\n"
+    "/code - see your family code and who is connected\n"
+    "/newcode - disconnect all family and get a new code\n"
+    "/help - show this message\n\n"
+    "In an emergency, call 112."
+)
+HELP_FAMILY = (
+    "Sahayi - help for family\n\n"
+    "You get an alert here when Sahayi thinks the member needs attention. You can also ask about them any time.\n\n"
+    "Commands:\n"
+    "/family CODE - connect to a member (ask them for their code)\n"
+    "/status - latest summary and alerts\n"
+    "/ask QUESTION - or just type a question, for example: How is she today?\n"
+    "/stopfamily - disconnect from the member\n"
+    "/help - show this message\n\n"
+    "In an emergency, call 112."
+)
+
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Role-aware command list: family chats see the family commands, members the member commands."""
+    cid = update.effective_chat.id
+    if is_family_chat(update):
+        text = HELP_FAMILY
+    elif is_elder(cid):
+        text = HELP_MEMBER
+    else:  # not known yet: show both
+        text = HELP_MEMBER + "\n\n" + "-" * 20 + "\n\n" + HELP_FAMILY
+    await update.message.reply_text(text)
+
+
+async def set_menu(app) -> None:
+    """Fill Telegram's built-in command menu (the / button next to the message box)."""
+    from telegram import BotCommand
+    await app.bot.set_my_commands([BotCommand(c, d) for c, d in COMMANDS])
 
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if is_family_chat(update):
+        await family_question(update, context, update.message.text)
+        return
     await respond(update, context, text=update.message.text)
 
 
 async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     media = update.message.voice or update.message.audio
     data = await download_bytes(media)
+    if is_family_chat(update):  # a family member asking by voice
+        stt = await asyncio.to_thread(detect_and_transcribe, data, "voice.ogg")
+        await family_question(update, context, stt["text"])
+        return
     # Telegram voice notes are OGG/Opus; our STT accepts them as is
     await respond(update, context, text=update.message.caption or "", audio=(data, "voice.ogg"))
 
@@ -152,7 +310,7 @@ async def on_image_document(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 if __name__ == '__main__':
     load_dotenv()
-    app = ApplicationBuilder().token(os.environ["TELEGRAM_TOKEN"]).build()
+    app = ApplicationBuilder().token(os.environ["TELEGRAM_TOKEN"]).post_init(set_menu).build()
 
     # 1. This prints ALL interactions to the console (Type filters.ALL catches text, photos, stickers, commands, etc.)
     app.add_handler(MessageHandler(filters.ALL, log_interaction), group=-1)
@@ -161,6 +319,11 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("family", family_join))
     app.add_handler(CommandHandler("stopfamily", family_leave))
+    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("code", my_code))
+    app.add_handler(CommandHandler("newcode", new_code))
+    app.add_handler(CommandHandler("status", family_status))
+    app.add_handler(CommandHandler("ask", family_ask))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, on_voice))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))

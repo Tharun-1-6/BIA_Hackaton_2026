@@ -7,6 +7,7 @@ import threading
 import time
 
 from bia_hackaton_2026.agent import run_turn
+from bia_hackaton_2026.pipeline import store
 from bia_hackaton_2026.stt.detect import detect_and_transcribe
 from bia_hackaton_2026.vlm import build_agent_input, describe_verified
 
@@ -24,6 +25,7 @@ def _lock(chat_id: str) -> threading.Lock:
 
 def reset_chat(chat_id) -> None:
     _HISTORY.pop(str(chat_id), None)
+    store.clear_history(chat_id)  # a fresh conversation; the activity log family sees is kept
     _IMAGE_SEEN.discard(str(chat_id))
     _IMAGE_ASKED.discard(str(chat_id))
 
@@ -75,10 +77,14 @@ def handle_message(
             out["seconds"] = round(time.perf_counter() - t0, 2)
             return out
 
-        history = _HISTORY.setdefault(chat_id, [])
+        if chat_id not in _HISTORY:  # first use since the bot started: reload the saved conversation
+            _HISTORY[chat_id] = store.load_history(chat_id)
+        history = _HISTORY[chat_id]
+        before = len(history)
         kw = {"model": llm_model} if llm_model else {}
         # send=False: the transport (Telegram) delivers messages itself
         res = run_turn(agent_input, history, send=False, **kw)
+        store.add_history(chat_id, history[before:])  # persist this exchange
         turn = res["turn"]
         out.update(
             reply=res["user_message"], alert=res["family_message"], level=turn.family.suggested_level,
