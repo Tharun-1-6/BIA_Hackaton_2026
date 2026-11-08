@@ -376,8 +376,18 @@ async def on_image_document(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 if __name__ == '__main__':
     load_dotenv()
-    app = (ApplicationBuilder().token(os.environ["TELEGRAM_TOKEN"]).post_init(set_menu)
-           .connect_timeout(20).read_timeout(30).write_timeout(30).pool_timeout(20).build())
+    builder = ApplicationBuilder().post_init(set_menu).connect_timeout(20).read_timeout(30).write_timeout(30).pool_timeout(20)
+    if os.environ.get("TELEGRAM_TEST") == "1":
+        # Telegram TEST environment: separate accounts and bots, so several fake users can be created to try the
+        # family flow. Uses its own token (from the test BotFather) and its own database file.
+        builder = (builder.token(os.environ["TELEGRAM_TEST_TOKEN"])
+                   .base_url("https://api.telegram.org/bot{token}/test")
+                   .base_file_url("https://api.telegram.org/file/bot{token}/test"))
+        store.DB_PATH = store.DB_PATH.with_name("sahayi_test.db")
+        print(f"*** TELEGRAM TEST MODE *** (test server, database: {store.DB_PATH.name})")
+    else:
+        builder = builder.token(os.environ["TELEGRAM_TOKEN"])
+    app = builder.build()
     app.add_error_handler(on_error)
 
     # 1. This prints ALL interactions to the console (Type filters.ALL catches text, photos, stickers, commands, etc.)

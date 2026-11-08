@@ -50,3 +50,7 @@ src/bia_hackaton_2026/notify/family_chats.json
 
 # Sahayi database (private conversations, family links)
 data/
+
+# Media saved by the Telegram bot
+src/bia_hackaton_2026/telegram/audio/
+src/bia_hackaton_2026/telegram/images/

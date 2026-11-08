@@ -88,8 +88,7 @@ def handle_message(
         history = _HISTORY[chat_id]
         before = len(history)
         kw = {"model": llm_model} if llm_model else {}
-        # send=False: the transport (Telegram) delivers messages itself
-        res = run_turn(agent_input, history, send=False, **kw)
+        res = run_turn(agent_input, history, **kw)  # the transport (Telegram) delivers messages itself
         store.add_history(chat_id, history[before:])  # persist this exchange
         turn = res["turn"]
         out.update(

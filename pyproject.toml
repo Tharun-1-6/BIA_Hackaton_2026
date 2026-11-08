@@ -1,7 +1,7 @@
 [project]
 name = "bia-hackaton-2026"
 version = "0.1.0"
-description = "Add your description here"
+description = "Sahayi: a Malayalam-first Telegram assistant for seniors and people with disabilities"
 readme = "README.md"
 authors = [
     { name = "Ananthannn", email = "160157709+Ananthannn@users.noreply.github.com" }

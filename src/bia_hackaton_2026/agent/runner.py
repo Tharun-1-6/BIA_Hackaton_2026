@@ -1,5 +1,5 @@
-"""One agent turn. Same flow as process_message() in the repo-root main.py (retry once, fallback
-Turn, family-send rule), but returns everything so the Streamlit UI can display it."""
+"""One agent turn: retry once, fallback Turn, family-send rule. Delivery is left to the transport;
+this returns everything so Telegram and the Streamlit UI can display or send it."""
 import sys
 import time
 
@@ -8,21 +8,17 @@ from bia_hackaton_2026.message_processor.formatter import format_family_message,
 from bia_hackaton_2026.message_processor.parser import parse_response
 from bia_hackaton_2026.message_processor.schema import Turn
 from bia_hackaton_2026.message_processor.validator import validate_turn
-from bia_hackaton_2026.whatsapp.sender import send_message
 
-# send_message() prints the family alert, which contains an emoji; Windows consoles (cp1252) crash on it.
+# The family alert contains an emoji; Windows consoles (cp1252) crash when printing it.
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 except Exception:
     pass
 
-USER_PHONE = "+919876543210"      # example numbers, as in main.py
-FAMILY_PHONE = "+919876543211"
-MEMORY_LIMIT = 20                 # plain truncation of old messages, as in main.py
+MEMORY_LIMIT = 20                 # plain truncation of old messages
 
 
-def run_turn(user_input: str, history: list[dict], model: str = MODEL, api_key: str | None = None,
-             send: bool = True) -> dict:
+def run_turn(user_input: str, history: list[dict], model: str = MODEL, api_key: str | None = None) -> dict:
     """Appends the exchange to `history` (in place). Returns dict with turn, messages, send flag,
     raw LLM output, attempts, fallback flag, error, seconds, model."""
     t0 = time.perf_counter()
@@ -51,11 +47,6 @@ def run_turn(user_input: str, history: list[dict], model: str = MODEL, api_key: 
     user_message = format_user_message(turn)
     family_message = format_family_message(turn)
     family_sent = bool(turn.family.send or turn.family.suggested_level >= 2)
-    if send:  # transports that deliver messages themselves (Telegram) pass send=False
-        send_message(USER_PHONE, user_message)  # prints to the terminal
-        if family_sent:
-            send_message(FAMILY_PHONE, family_message)
-
     history += [
         {"role": "user", "content": user_input},
         {"role": "assistant", "content": turn.model_dump_json()},
